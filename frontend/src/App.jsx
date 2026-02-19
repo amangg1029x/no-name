@@ -10,7 +10,7 @@ import RingExplainerPanel  from './components/RingExplainerPanel.jsx'
 import RiskHeatmapTimeline from './components/RiskHeatmapTimeline.jsx'
 import ScoreBreakdownPanel from './components/ScoreBreakdownPanel.jsx'
 
-const API_URL = 'http://localhost:8000/api/analyze'
+const API_URL = 'https://muletrace-backend.vercel.app/api/analyze'
 
 const riskColor = (score) => {
   if (score == null) return 'var(--text-2)'
