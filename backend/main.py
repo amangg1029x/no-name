@@ -50,7 +50,7 @@ ANALYSE_KWARGS = dict(
     cycle_max_len=5,
     fan_threshold=10,
     fan_window_hours=72,
-    shell_max_txns=3,
+    shell_max_txns=5,   # raised from 3 to catch shared intermediate nodes
     shell_min_hops=3,
 )
 SCORER_KWARGS = dict(
@@ -120,6 +120,7 @@ def _build_response(
     cycles: List[dict],
     fans: List[dict],
     shells: List[dict],
+    structs: Optional[List[dict]] = None,
 ) -> Dict[str, Any]:
     """
     Assemble the canonical response dict.
@@ -196,6 +197,19 @@ def _build_response(
             "hops"         : int(s["hops"]),
         }
 
+    for st in (structs or []):
+        ring_id = st["ring_id"]
+        fraud_rings[ring_id] = {
+            "ring_id"            : ring_id,
+            "type"               : "STRUCTURING",
+            "accounts"           : [str(st["account_id"])],
+            "total_amount"       : float(st.get("total_amount", 0.0)),
+            "tx_ids"             : [str(t) for t in st.get("tx_ids", [])],
+            "counterparty_count" : int(st["counterparty_count"]) if st.get("counterparty_count") else None,
+            "window_start"       : str(st["window_start"]) if st.get("window_start") else None,
+            "window_end"         : str(st["window_end"])   if st.get("window_end")   else None,
+        }
+
     # ── summary ───────────────────────────────────────────────────────────────
     scored = scores_df[~scores_df["skipped"]]
     skipped_count = int(scores_df["skipped"].sum())
@@ -207,10 +221,10 @@ def _build_response(
     summary = {
         "analysed_at"          : datetime.now(timezone.utc).isoformat(),
         "total_transactions"   : len(engine.df),
-        "total_accounts"       : int(
-            engine.df["sender_id"].astype(str).nunique()
-            + engine.df["receiver_id"].astype(str).nunique()
-        ),
+        "total_accounts"       : int(len(
+            set(engine.df["sender_id"].astype(str))
+            | set(engine.df["receiver_id"].astype(str))
+        )),
         "suspicious_accounts"  : len(suspicious_accounts),
         "skipped_accounts"     : skipped_count,
         "fraud_rings_detected" : len(fraud_rings),
@@ -290,6 +304,7 @@ async def analyze(
             max_txns=ANALYSE_KWARGS["shell_max_txns"],
             min_hops=ANALYSE_KWARGS["shell_min_hops"],
         )
+        structs = engine.detect_structuring()
 
     except Exception as exc:
         raise HTTPException(
@@ -309,7 +324,7 @@ async def analyze(
 
     # ── 5. Build response ─────────────────────────────────────────────────────
     try:
-        result = _safe(_build_response(engine, scorer, scores_df, cycles, fans, shells))
+        result = _safe(_build_response(engine, scorer, scores_df, cycles, fans, shells, structs))
     except Exception as exc:
         raise HTTPException(
             status_code=500,

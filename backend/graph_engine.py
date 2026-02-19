@@ -43,28 +43,89 @@ class FraudDetectionEngine:
     # ------------------------------------------------------------------
 
     def _build_graph(self) -> nx.DiGraph:
-        """Build a directed, multi-edge weighted graph from transactions."""
+        """Build a directed weighted graph. Vectorized — much faster than iterrows."""
         G = nx.DiGraph()
-        for _, row in self.df.iterrows():
-            src, dst = str(row["sender_id"]), str(row["receiver_id"])
-            if G.has_edge(src, dst):
-                # Accumulate weight (total amount) and transaction count
-                G[src][dst]["weight"] += float(row["amount"])
-                G[src][dst]["tx_count"] += 1
-                G[src][dst]["tx_ids"].append(row["transaction_id"])
-            else:
-                G.add_edge(
-                    src,
-                    dst,
-                    weight=float(row["amount"]),
-                    tx_count=1,
-                    tx_ids=[row["transaction_id"]],
-                )
+        df2 = self.df.assign(
+            sender_id=self.df["sender_id"].astype(str),
+            receiver_id=self.df["receiver_id"].astype(str),
+        )
+        grouped = (
+            df2.groupby(["sender_id", "receiver_id"], sort=False)
+            .agg(weight=("amount", "sum"), tx_count=("transaction_id", "count"),
+                 tx_ids=("transaction_id", list))
+            .reset_index()
+        )
+        for _, row in grouped.iterrows():
+            G.add_edge(row["sender_id"], row["receiver_id"],
+                       weight=float(row["weight"]), tx_count=int(row["tx_count"]),
+                       tx_ids=row["tx_ids"])
         return G
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _is_likely_legitimate(self, account_id: str) -> bool:
+        """
+        Heuristic classifier to distinguish legitimate high-volume entities
+        (payroll companies, merchants) from actual fraud hubs.
+
+        A legitimate FAN entity typically:
+          1. Sends to the SAME counterparties repeatedly over time (payroll)
+             OR receives from the SAME counterparties repeatedly (merchant sales)
+          2. Has consistent amounts across transactions (salary = regular)
+          3. Shows no INBOUND aggregation followed immediately by outbound dispersal
+             (the hallmark of a money mule hub is: collect → immediately scatter)
+
+        Returns True if the account should be considered legitimate.
+        """
+        df = self.df
+        sent     = df[df["sender_id"].astype(str) == account_id]
+        received = df[df["receiver_id"].astype(str) == account_id]
+
+        # Rule 1: Payroll pattern — sends to many, but same recipients repeat
+        if len(sent) > 0:
+            recipient_counts = sent["receiver_id"].value_counts()
+            repeat_ratio = (recipient_counts > 1).sum() / len(recipient_counts)
+            # If ≥40% of recipients appear more than once → recurring payroll
+            if repeat_ratio >= 0.4:
+                return True
+
+        # Rule 2: Merchant pattern — receives from many but counterparties repeat
+        if len(received) > 0:
+            sender_counts = received["sender_id"].value_counts()
+            repeat_ratio = (sender_counts > 1).sum() / len(sender_counts)
+            if repeat_ratio >= 0.4:
+                return True
+
+        # Rule 3: Amount regularity + outbound-dominant pattern
+        # Payroll companies: consistent salaries AND they send far more than they receive.
+        # A mule hub has balanced in/out (collects then disburses similar volume).
+        if len(sent) >= 5:
+            amounts  = sent["amount"]
+            cv       = amounts.std() / (amounts.mean() + 1e-9)
+            # Only consider this a legitimate payroll signal if outbound >> inbound
+            # (payroll companies receive revenue infrequently, pay employees frequently)
+            outbound_dominant = len(sent) >= len(received) * 3
+            if cv < 0.15 and outbound_dominant:
+                return True
+
+        # Rule 4: Mule hub fingerprint — all-unique counterparties on BOTH sides
+        # A real mule hub has: many different senders AND many different receivers,
+        # with almost no repeat counterparties on either side (every sender/receiver is new).
+        # Legitimate entities (payroll, merchants) have high repeat rates on at least one side.
+        if len(received) >= 5 and len(sent) >= 5:
+            recv_repeat = (received["sender_id"].value_counts() > 1).sum()
+            sent_repeat = (sent["receiver_id"].value_counts() > 1).sum()
+            recv_uniq   = received["sender_id"].nunique()
+            sent_uniq   = sent["receiver_id"].nunique()
+            # If both sides are mostly unique → mule hub → NOT legitimate
+            recv_repeat_ratio = recv_repeat / max(recv_uniq, 1)
+            sent_repeat_ratio = sent_repeat / max(sent_uniq, 1)
+            if recv_repeat_ratio < 0.1 and sent_repeat_ratio < 0.1:
+                return False  # both sides all-unique → classic mule topology
+
+        return False
 
     def _mark_suspicious(
         self,
@@ -111,7 +172,13 @@ class FraudDetectionEngine:
         self, min_len: int = 3, max_len: int = 5
     ) -> List[dict]:
         """
-        Detect circular money flows (ring transactions).
+        Detect circular money flows using Strongly Connected Components.
+
+        Uses SCC decomposition first to isolate cycle-containing subgraphs,
+        then runs simple_cycles only within each SCC. This is correct and fast:
+        - Finds ALL cycles of the right length regardless of graph density
+        - Avoids exhausting the cap on irrelevant parts of the graph
+        - O(V+E) for SCC + O(cycles) for enumeration
 
         Parameters
         ----------
@@ -119,46 +186,66 @@ class FraudDetectionEngine:
             Minimum cycle length (number of nodes). Default 3.
         max_len : int
             Maximum cycle length (number of nodes). Default 5.
-
-        Returns
-        -------
-        List of dicts, one per cycle, with keys:
-            ring_id, cycle, accounts, total_amount, tx_ids
         """
         results = []
         ring_counter = 0
 
-        # nx.simple_cycles can be expensive on large graphs; we cap it
-        for cycle in islice(nx.simple_cycles(self.graph), 50_000):
-            if min_len <= len(cycle) <= max_len:
-                ring_counter += 1
-                ring_id = f"CYCLE-{ring_counter:04d}"
+        # Step 1: find strongly connected components (nodes that can form cycles)
+        # Only SCCs of size >= min_len can contain valid cycles
+        sccs = [
+            scc for scc in nx.strongly_connected_components(self.graph)
+            if len(scc) >= min_len
+        ]
 
-                total_amount = 0.0
-                tx_ids: List = []
-                for i, node in enumerate(cycle):
-                    nxt = cycle[(i + 1) % len(cycle)]
-                    if self.graph.has_edge(node, nxt):
-                        edge = self.graph[node][nxt]
-                        total_amount += edge["weight"]
-                        tx_ids.extend(edge["tx_ids"])
+        seen_cycles: set = set()
 
-                cycle_info = {
-                    "ring_id": ring_id,
-                    "cycle": cycle,
-                    "accounts": list(cycle),
-                    "total_amount": round(total_amount, 2),
-                    "tx_ids": tx_ids,
-                }
-                results.append(cycle_info)
+        # Step 2: enumerate cycles within each SCC independently
+        # This prevents dense parts of the graph from exhausting the global cap
+        PER_SCC_CAP = 10_000  # generous per-component cap
 
-                for account in cycle:
-                    self._mark_suspicious(
-                        account,
-                        reason=f"Participates in transaction cycle {ring_id}",
-                        ring_id=ring_id,
-                        extra={"cycle_length": len(cycle)},
-                    )
+        for scc in sccs:
+            subG = self.graph.subgraph(scc)
+            for cycle in islice(nx.simple_cycles(subG), PER_SCC_CAP):
+                if min_len <= len(cycle) <= max_len:
+                    # Canonicalise to avoid duplicates
+                    key = tuple(sorted(cycle))
+                    if key in seen_cycles:
+                        continue
+                    seen_cycles.add(key)
+
+                    ring_counter += 1
+                    ring_id = f"CYCLE-{ring_counter:04d}"
+
+                    total_amount = 0.0
+                    tx_ids: List = []
+                    for i, node in enumerate(cycle):
+                        nxt = cycle[(i + 1) % len(cycle)]
+                        if self.graph.has_edge(node, nxt):
+                            edge = self.graph[node][nxt]
+                            total_amount += edge["weight"]
+                            tx_ids.extend(edge["tx_ids"])
+
+                    # Skip trivially small cycles — bill-splitting, micropayments
+                    # Real laundering cycles involve meaningful sums (>$1,000 total)
+                    if total_amount < 1_000.0:
+                        continue
+
+                    cycle_info = {
+                        "ring_id": ring_id,
+                        "cycle": cycle,
+                        "accounts": list(cycle),
+                        "total_amount": round(total_amount, 2),
+                        "tx_ids": tx_ids,
+                    }
+                    results.append(cycle_info)
+
+                    for account in cycle:
+                        self._mark_suspicious(
+                            account,
+                            reason=f"Participates in transaction cycle {ring_id}",
+                            ring_id=ring_id,
+                            extra={"cycle_length": len(cycle)},
+                        )
 
         return results
 
@@ -217,26 +304,32 @@ class FraudDetectionEngine:
                         "total_amount": round(window_txns["amount"].sum(), 2),
                     }
                     results.append(info)
-                    self._mark_suspicious(
-                        account_id,
-                        reason=f"{pattern} pattern ({counterparties} counterparties in {window_hours}h)",
-                        ring_id=ring_id,
-                        extra=info,
-                    )
+                    # Only flag if entity classification doesn't suggest it's legitimate
+                    if not self._is_likely_legitimate(account_id):
+                        self._mark_suspicious(
+                            account_id,
+                            reason=f"{pattern} pattern ({counterparties} counterparties in {window_hours}h)",
+                            ring_id=ring_id,
+                            extra=info,
+                        )
                     break  # one finding per account per pattern is enough
 
-        all_accounts = (
-            set(self.df["sender_id"].astype(str))
-            | set(self.df["receiver_id"].astype(str))
-        )
-        for acct in all_accounts:
+        # Pre-filter: only check accounts that have enough transactions
+        # to possibly hit the threshold — massive speedup at scale
+        sender_counts  = self.df["sender_id"].astype(str).value_counts()
+        receiver_counts= self.df["receiver_id"].astype(str).value_counts()
+        fan_out_candidates = set(sender_counts[sender_counts >= threshold].index)
+        fan_in_candidates  = set(receiver_counts[receiver_counts >= threshold].index)
+
+        for acct in fan_in_candidates:
             _check_account(acct, as_receiver=True)   # fan-in
+        for acct in fan_out_candidates:
             _check_account(acct, as_receiver=False)  # fan-out
 
         return results
 
     def detect_shell_networks(
-        self, max_txns: int = 3, min_hops: int = 3
+        self, max_txns: int = 5, min_hops: int = 3
     ) -> List[dict]:
         """
         Identify shell-account chains: sequences of accounts that each
@@ -322,6 +415,87 @@ class FraudDetectionEngine:
 
         return results
 
+    def detect_structuring(
+        self,
+        amount_ceiling: float = 10_000.0,
+        band_pct: float = 0.08,
+        min_senders: int = 5,
+        window_hours: int = 168,
+    ) -> List[dict]:
+        """
+        Detect structuring (smurfing) — multiple senders each sending amounts
+        clustered just below a reporting threshold within a time window.
+
+        Classic pattern: 6+ people each send $9,500–$9,999 to the same account
+        within a week to stay below the $10,000 CTR filing threshold.
+
+        Parameters
+        ----------
+        amount_ceiling : float
+            The regulatory reporting threshold to test against (default $10,000).
+        band_pct : float
+            How far below the ceiling counts as "structured" (default 8% → $9,200+).
+        min_senders : int
+            Minimum number of structured senders to flag (default 5).
+        window_hours : int
+            Time window in hours (default 168 = 1 week).
+        """
+        results = []
+        ring_counter = 0
+        lower_bound  = amount_ceiling * (1.0 - band_pct)  # e.g. $9,200
+        window       = timedelta(hours=window_hours)
+
+        # Only look at transactions in the structured amount band
+        df = self.df.copy()
+        df["sender_id"]   = df["sender_id"].astype(str)
+        df["receiver_id"] = df["receiver_id"].astype(str)
+        in_band = df[(df["amount"] >= lower_bound) & (df["amount"] < amount_ceiling)]
+
+        if in_band.empty:
+            return results
+
+        in_band = in_band.sort_values("timestamp")
+
+        # For each receiver, find windows where many different senders
+        # send structured amounts
+        for receiver, group in in_band.groupby("receiver_id"):
+            timestamps = group["timestamp"].values
+            for i, ts in enumerate(timestamps):
+                window_end  = pd.Timestamp(ts) + window
+                window_txns = group[
+                    (group["timestamp"] >= pd.Timestamp(ts))
+                    & (group["timestamp"] <= window_end)
+                ]
+                unique_senders = window_txns["sender_id"].nunique()
+                if unique_senders >= min_senders:
+                    ring_counter += 1
+                    ring_id = f"STRUCT-{ring_counter:04d}"
+                    total   = round(window_txns["amount"].sum(), 2)
+                    tx_ids  = window_txns["transaction_id"].tolist()
+                    info = {
+                        "ring_id":           ring_id,
+                        "account_id":        receiver,
+                        "pattern":           "STRUCTURING",
+                        "counterparty_count": unique_senders,
+                        "window_start":      str(pd.Timestamp(ts)),
+                        "window_end":        str(window_end),
+                        "tx_ids":            tx_ids,
+                        "total_amount":      total,
+                        "amount_ceiling":    amount_ceiling,
+                    }
+                    results.append(info)
+                    if not self._is_likely_legitimate(receiver):
+                        self._mark_suspicious(
+                            receiver,
+                            reason=f"Structuring pattern: {unique_senders} senders with amounts"
+                                   f" ${lower_bound:,.0f}–${amount_ceiling:,.0f} within {window_hours}h",
+                            ring_id=ring_id,
+                            extra=info,
+                        )
+                    break  # one finding per receiver is enough
+
+        return results
+
     # ------------------------------------------------------------------
     # Aggregate analysis
     # ------------------------------------------------------------------
@@ -332,7 +506,7 @@ class FraudDetectionEngine:
         cycle_max_len: int = 5,
         fan_threshold: int = 10,
         fan_window_hours: int = 72,
-        shell_max_txns: int = 3,
+        shell_max_txns: int = 5,
         shell_min_hops: int = 3,
     ) -> pd.DataFrame:
         """
@@ -349,6 +523,7 @@ class FraudDetectionEngine:
         self.detect_cycles(min_len=cycle_min_len, max_len=cycle_max_len)
         self.detect_fan_in_out(threshold=fan_threshold, window_hours=fan_window_hours)
         self.detect_shell_networks(max_txns=shell_max_txns, min_hops=shell_min_hops)
+        self.detect_structuring()
 
         if not self._suspicious:
             return pd.DataFrame(

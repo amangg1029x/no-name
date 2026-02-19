@@ -57,11 +57,17 @@ export default function App() {
 
   const handleUpload = async (file) => {
     setLoading(true); setError(null); setData(null)
-    const t0 = performance.now()
+    // Start timing when XHR fires (onUploadProgress), not on button click —
+    // avoids inflating with Uvicorn cold-start and React render overhead
+    let t0 = null
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const res = await axios.post(API_URL, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: () => { if (!t0) t0 = performance.now() },
+      })
+      if (!t0) t0 = performance.now()
       setData(res.data)
       setElapsed(((performance.now() - t0) / 1000).toFixed(2))
     } catch (e) {

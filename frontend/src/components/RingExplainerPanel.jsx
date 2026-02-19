@@ -68,7 +68,7 @@ const PATTERN_DESCRIPTIONS = {
         `$${amt} distributed rapidly`,
         'Fan-out following likely aggregation is a two-stage laundering indicator',
       ],
-      what_to_do: 'Identify downstream recipients. Check if any destination accounts have prior SAR filings. Map beneficial ownership across the ${cp} recipients.',
+      what_to_do: `Identify downstream recipients. Check if any destination accounts have prior SAR filings. Map beneficial ownership across the ${cp} recipients.`,
     }
   },
 

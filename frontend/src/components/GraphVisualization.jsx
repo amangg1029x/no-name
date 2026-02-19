@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import cytoscape from 'cytoscape'
 
 const riskColor = (score) => {
-  if (score == null) return '#64748b'
-  if (score >= 70)   return '#ff3366'
-  if (score >= 40)   return '#ffaa00'
-  return '#00d4ff'
+  if (score == null) return '#44444e'
+  if (score >= 70)   return '#c07060'
+  if (score >= 40)   return '#b8860b'
+  return '#4a7c59'
 }
 
 const riskLabel = (score) => {
@@ -15,13 +15,11 @@ const riskLabel = (score) => {
   return 'LOW'
 }
 
-const fmt = (n) => (n == null ? '—' : Number(n).toFixed(1))
-
 const EDGE_COLORS = {
-  CYCLE:    '#ff3366',
-  'FAN-IN': '#00d4ff',
-  'FAN-OUT':'#00ff88',
-  SHELL:    '#bb88ff',
+  CYCLE:    '#8a4030',
+  'FAN-IN': '#4a5e70',
+  'FAN-OUT':'#7a6020',
+  SHELL:    '#6a5820',
 }
 
 export default function GraphVisualization({ data }) {
@@ -32,7 +30,6 @@ export default function GraphVisualization({ data }) {
   useEffect(() => {
     if (!data) return
 
-    // ── Build graph data ───────────────────────────────────────────
     const { suspicious_accounts, fraud_rings } = data
 
     const scoreMap   = {}
@@ -65,27 +62,23 @@ export default function GraphVisualization({ data }) {
 
     const elements = [
       ...[...nodeSet].map((id) => {
-        const score      = scoreMap[id]
-        const suspicious = score != null && score >= 40
-        const skipped    = patternMap[id]?.skipped
-        const color      = skipped ? '#ffaa00' : suspicious ? '#ff3366' : '#00d4ff'
-        return { data: { id, score, suspicious, skipped, patterns: patternMap[id] || {}, color } }
+        const score  = scoreMap[id]
+        const isHigh = score != null && score >= 70
+        const isMed  = score != null && score >= 40 && score < 70
+        const color  = riskColor(score)
+        return { data: { id, score, isHigh, isMed, patterns: patternMap[id] || {}, color } }
       }),
       ...edges.map((e, i) => ({
         data: { id: `e${i}`, source: e.source, target: e.target,
-                ring_id: e.ring_id, type: e.type, color: EDGE_COLORS[e.type] || '#00d4ff' }
+                ring_id: e.ring_id, type: e.type, color: EDGE_COLORS[e.type] || '#4a4a54' }
       })),
     ]
 
-    // ── Init Cytoscape — wait for container to have real dimensions ─
     const initCytoscape = () => {
       const el = containerRef.current
       if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return
 
-      if (cyRef.current) {
-        cyRef.current.destroy()
-        cyRef.current = null
-      }
+      if (cyRef.current) { cyRef.current.destroy(); cyRef.current = null }
 
       cyRef.current = cytoscape({
         container: el,
@@ -95,42 +88,67 @@ export default function GraphVisualization({ data }) {
             selector: 'node',
             style: {
               'background-color':        'data(color)',
-              'border-width':            3,
+              'background-opacity':      0.85,
+              'border-width':            1,
               'border-color':            'data(color)',
-              'border-opacity':          0.85,
-              'width':  (e) => (e.data('suspicious') ? 46 : 30),
-              'height': (e) => (e.data('suspicious') ? 46 : 30),
+              'border-opacity':          0.5,
+              'width':  (e) => e.data('isHigh') ? 44 : e.data('isMed') ? 34 : 26,
+              'height': (e) => e.data('isHigh') ? 44 : e.data('isMed') ? 34 : 26,
               'label':                   'data(id)',
-              'color':                   '#e2e8f0',
-              'font-size':               9,
-              'font-family':             '"Share Tech Mono", monospace',
+              'color':                   'rgba(232,232,234,0.75)',
+              'font-size':               8.5,
+              'font-family':             '"DM Mono", monospace',
               'text-valign':             'bottom',
-              'text-margin-y':           6,
-              'text-background-color':   '#0f0f1a',
-              'text-background-opacity': 0.85,
-              'text-background-padding': '3px',
-              'shadow-blur':   (e) => (e.data('suspicious') ? 28 : 8),
+              'text-margin-y':           5,
+              'text-background-color':   '#0a0a0b',
+              'text-background-opacity': 0.7,
+              'text-background-padding': '2px',
+              'shadow-blur':   (e) => e.data('isHigh') ? 18 : 6,
               'shadow-color':  'data(color)',
-              'shadow-opacity':(e) => (e.data('suspicious') ? 0.95 : 0.4),
+              'shadow-opacity': (e) => e.data('isHigh') ? 0.6 : 0.25,
               'shadow-offset-x': 0,
               'shadow-offset-y': 0,
             },
           },
-          { selector: 'node:selected', style: { 'border-width': 5, 'shadow-blur': 48, 'shadow-opacity': 1 } },
+          {
+            selector: 'node:selected',
+            style: { 'border-width': 2, 'border-opacity': 1, 'shadow-blur': 24, 'shadow-opacity': 0.8 }
+          },
           {
             selector: 'edge',
             style: {
-              'width': 2, 'line-color': 'data(color)',
-              'target-arrow-color': 'data(color)', 'target-arrow-shape': 'triangle',
-              'curve-style': 'bezier', 'opacity': 0.65, 'arrow-scale': 1.2,
+              'width': 1.5,
+              'line-color':            'data(color)',
+              'target-arrow-color':    'data(color)',
+              'target-arrow-shape':    'triangle',
+              'curve-style':           'bezier',
+              'opacity':               0.5,
+              'arrow-scale':           0.9,
             },
           },
-          { selector: 'edge:selected', style: { 'opacity': 1, 'width': 3 } },
+          { selector: 'edge:selected', style: { opacity: 0.9, width: 2 } },
         ],
         layout: {
-          name: 'cose', animate: true, animationDuration: 900,
-          nodeRepulsion: 14000, idealEdgeLength: 130, edgeElasticity: 100,
-          gravity: 0.25, numIter: 1000, fit: true, padding: 40,
+          name: 'cose',
+          animate: true,
+          animationDuration: 600,
+          // Stronger repulsion keeps rings visually separated
+          nodeRepulsion: 28000,
+          // Shorter ideal edge length clusters ring members together
+          idealEdgeLength: 70,
+          edgeElasticity: 100,
+          // Higher gravity pulls disconnected components toward center
+          // preventing the flat horizontal sprawl
+          gravity: 1.8,
+          gravityRange: 3.8,
+          numIter: 2500,
+          initialTemp: 200,
+          coolingFactor: 0.97,
+          minTemp: 1.0,
+          fit: true,
+          padding: 40,
+          // Randomize initial positions to avoid degenerate linear layouts
+          randomize: true,
         },
         userZoomingEnabled:  true,
         userPanningEnabled:  true,
@@ -148,18 +166,14 @@ export default function GraphVisualization({ data }) {
       })
     }
 
-    // Try immediately — works if container already has dimensions
     initCytoscape()
 
-    // Fallback: ResizeObserver fires when the container gets real size
-    // (handles the case where this component renders before layout paints)
     const ro = new ResizeObserver(() => {
       if (!cyRef.current) initCytoscape()
       else cyRef.current.resize()
     })
     if (containerRef.current) ro.observe(containerRef.current)
 
-    // Belt-and-suspenders: retry after layout has fully painted
     const timer = setTimeout(() => {
       if (!cyRef.current) initCytoscape()
       else cyRef.current.resize()
@@ -174,74 +188,97 @@ export default function GraphVisualization({ data }) {
 
   const activePatterns = (d) => {
     const p = d.patterns || {}
-    return [
-      p.has_cycle    && 'Cycle',
-      p.has_fan      && 'Fan-In/Out',
-      p.has_shell    && 'Shell',
-      p.has_velocity && 'Velocity',
-    ].filter(Boolean)
+    return [p.has_cycle && 'Cycle', p.has_fan && 'Fan', p.has_shell && 'Shell', p.has_velocity && 'Velocity'].filter(Boolean)
   }
 
-  const totalNodes = data
-    ? Object.values(data.fraud_rings).reduce((s, r) => s + (r.accounts?.length || 0), 0)
-    : 0
+  const totalNodes = data ? Object.values(data.fraud_rings).reduce((s, r) => s + (r.accounts?.length || 0), 0) : 0
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
-      {/* Canvas — Cytoscape needs explicit pixel dimensions, position:absolute with inset:0 gives that */}
-      <div
-        ref={containerRef}
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
-      />
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
 
-      {/* Legend — positioned relative to the outer wrapper div */}
-      <div className="absolute top-3 right-3 flex flex-col gap-2 bg-card/90 backdrop-blur p-3 rounded-xl border border-border text-xs font-mono" style={{ zIndex: 10 }}>
-        {[['High ≥70','#ff3366'],['Medium 40-70','#ffaa00'],['Low <40','#00d4ff'],['Skipped','#64748b']].map(([label, color]) => (
-          <div key={label} className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
-            <span className="text-slate-500">{label}</span>
+      {/* Legend */}
+      <div style={{
+        position: 'absolute', top: 14, right: 14, zIndex: 10,
+        background: 'rgba(17,17,19,0.92)', backdropFilter: 'blur(8px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderRadius: 8, padding: '10px 13px',
+        display: 'flex', flexDirection: 'column', gap: 7,
+      }}>
+        {[['High ≥70', '#c07060'],['Medium 40–70','#b8860b'],['Low <40','#4a7c59'],['Skipped','#44444e']].map(([label, color]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, opacity: 0.85 }} />
+            <span style={{ fontFamily: '"DM Mono", monospace', fontSize: 10, color: 'rgba(139,139,148,1)' }}>{label}</span>
           </div>
         ))}
-        <div className="border-t border-border mt-1 pt-1 text-slate-600">Scroll = zoom</div>
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '2px 0' }} />
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 120 }}>
+          {[['Cycle','#8a4030'],['Fan-In','#4a5e70'],['Fan-Out','#7a6020'],['Shell','#6a5820']].map(([type, color]) => (
+            <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 14, height: 2, background: color, borderRadius: 1 }} />
+              <span style={{ fontFamily: '"DM Mono", monospace', fontSize: 9, color: '#55555f' }}>{type}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Stats overlay */}
-      <div className="absolute top-3 left-3 flex gap-3 text-xs font-mono text-slate-500" style={{ zIndex: 10 }}>
-        <span className="bg-card/80 px-2 py-1 rounded-lg border border-border">
-          nodes <span className="text-cblue ml-1">{totalNodes}</span>
-        </span>
-        <span className="bg-card/80 px-2 py-1 rounded-lg border border-border">
-          rings <span className="text-cpurple ml-1">{data ? Object.keys(data.fraud_rings).length : 0}</span>
-        </span>
+      {/* Stats */}
+      <div style={{ position: 'absolute', top: 14, left: 14, zIndex: 10, display: 'flex', gap: 8 }}>
+        {[
+          { label: 'nodes', value: totalNodes },
+          { label: 'rings', value: data ? Object.keys(data.fraud_rings).length : 0 },
+        ].map(({ label, value }) => (
+          <div key={label} style={{
+            padding: '4px 10px', borderRadius: 6,
+            background: 'rgba(17,17,19,0.88)', border: '1px solid rgba(255,255,255,0.07)',
+            fontFamily: '"DM Mono", monospace', fontSize: 10, color: '#55555f',
+            display: 'flex', gap: 6, alignItems: 'center',
+          }}>
+            {label} <span style={{ color: '#8b9cb0' }}>{value}</span>
+          </div>
+        ))}
       </div>
 
       {/* Tooltip */}
       {tooltip && (
-        <div className="cy-tooltip" style={{ left: tooltip.x, top: tooltip.y, zIndex: 9999 }}>
-          <div className="font-display font-bold text-base text-slate-100 mb-2">{tooltip.data.id}</div>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-slate-500 font-mono text-xs">SCORE</span>
-            <span className="font-mono font-bold text-sm" style={{ color: riskColor(tooltip.data.score) }}>
-              {fmt(tooltip.data.score)}
+        <div className="cy-tooltip">
+          <div style={{ fontFamily: '"DM Mono", monospace', fontWeight: 500, fontSize: 12, color: 'var(--text)', marginBottom: 8 }}>
+            {tooltip.data.id}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontFamily: '"DM Mono", monospace', fontSize: 11, color: 'var(--text-3)' }}>Score</span>
+            <span style={{ fontFamily: '"DM Mono", monospace', fontSize: 13, fontWeight: 500, color: riskColor(tooltip.data.score) }}>
+              {tooltip.data.score?.toFixed(1) ?? '—'}
             </span>
-            <span className="text-xs px-2 py-0.5 rounded-full font-mono font-bold"
-              style={{ background: riskColor(tooltip.data.score)+'22', color: riskColor(tooltip.data.score), border:`1px solid ${riskColor(tooltip.data.score)}44` }}>
+            <span style={{
+              fontFamily: '"DM Mono", monospace', fontSize: 10,
+              padding: '1px 6px', borderRadius: 3,
+              background: riskColor(tooltip.data.score) + '18',
+              color: riskColor(tooltip.data.score),
+              border: `1px solid ${riskColor(tooltip.data.score)}28`,
+            }}>
               {riskLabel(tooltip.data.score)}
             </span>
           </div>
           {tooltip.data.patterns?.ring_id && (
-            <div className="text-slate-500 font-mono text-xs mb-1">
-              Ring: <span className="text-cpurple">{tooltip.data.patterns.ring_id}</span>
+            <div style={{ fontFamily: '"DM Mono", monospace', fontSize: 10, color: 'var(--text-3)', marginBottom: 6 }}>
+              {tooltip.data.patterns.ring_id}
             </div>
           )}
           {activePatterns(tooltip.data).length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {activePatterns(tooltip.data).map((p) => (
-                <span key={p} className="text-xs px-2 py-0.5 rounded-full bg-cblue/10 text-cblue border border-cblue/20 font-mono">{p}</span>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {activePatterns(tooltip.data).map(p => (
+                <span key={p} style={{
+                  fontFamily: '"DM Mono", monospace', fontSize: 9.5,
+                  padding: '2px 6px', borderRadius: 3,
+                  background: 'rgba(255,255,255,0.06)', color: 'var(--text-2)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                }}>
+                  {p}
+                </span>
               ))}
             </div>
           )}
-          {tooltip.data.skipped && <div className="text-camber text-xs font-mono mt-2">⚠ Skipped (≥ 50 txns)</div>}
         </div>
       )}
     </div>
