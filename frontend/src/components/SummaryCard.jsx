@@ -1,35 +1,27 @@
 export default function SummaryCard({ label, value, sub, color, icon, delay = '' }) {
   return (
-    <div
-      className={`stat-shimmer relative overflow-hidden rounded-xl border border-border bg-card p-5 fade-in ${delay}`}
-      style={{ boxShadow: `0 0 28px ${color}14` }}
-    >
-      {/* Top row */}
+    <div className={`card fade-up ${delay} relative overflow-hidden`} style={{ padding: '20px 22px' }}>
       <div className="flex items-start justify-between">
-        <div className="flex flex-col gap-1">
-          <p className="text-slate-500 text-xs font-mono uppercase tracking-widest">
+        <div>
+          <div className="font-mono text-xs mb-3" style={{ color: 'var(--text-3)', letterSpacing: '0.09em', textTransform: 'uppercase' }}>
             {label}
-          </p>
-          <p
-            className="font-display font-extrabold text-3xl leading-none"
-            style={{ color, textShadow: `0 0 20px ${color}55` }}
-          >
+          </div>
+          <div className="font-serif text-4xl leading-none mb-2" style={{ color }}>
             {value ?? '—'}
-          </p>
+          </div>
           {sub && (
-            <p className="text-slate-600 text-xs font-mono mt-1">{sub}</p>
+            <div className="font-mono text-xs leading-relaxed" style={{ color: 'var(--text-3)' }}>
+              {sub}
+            </div>
           )}
         </div>
-        <span className="text-3xl opacity-50 select-none">{icon}</span>
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center text-base flex-shrink-0"
+          style={{ background: color + '12', border: `1px solid ${color}20`, color }}>
+          {icon}
+        </div>
       </div>
-
-      {/* Bottom accent line */}
-      <div
-        className="absolute bottom-0 left-0 right-0 h-px opacity-50"
-        style={{
-          background: `linear-gradient(90deg, transparent, ${color}, transparent)`,
-        }}
-      />
+      <div className="absolute bottom-0 left-0 right-0"
+        style={{ height: '1px', background: `linear-gradient(90deg, ${color}50, transparent)` }} />
     </div>
   )
 }
