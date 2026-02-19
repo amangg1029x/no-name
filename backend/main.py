@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 # ── Local modules (same directory) ────────────────────────────────────────────
@@ -64,12 +65,50 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# ── CORS — allow the React dev server (and any localhost port) ─────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",   # Vite default
+        "http://localhost:5173",   # Vite alt port
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],           # includes OPTIONS preflight
+    allow_headers=["*"],
+)
+
 
 # ── Helper: build the exact JSON structure ────────────────────────────────────
 
 def _nan_to_none(value: Any) -> Any:
     """Convert NaN / Inf floats to None so json.dumps doesn't choke."""
     if isinstance(value, float) and (value != value):   # NaN check
+        return None
+    return value
+
+
+def _safe(value: Any) -> Any:
+    """
+    Recursively convert numpy / pandas scalars to plain Python types so
+    json.dumps never hits a TypeError.
+    """
+    import numpy as np
+    if isinstance(value, dict):
+        return {k: _safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe(v) for v in value]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        v = float(value)
+        return None if (v != v) else v          # NaN → None
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.ndarray):
+        return [_safe(v) for v in value.tolist()]
+    if isinstance(value, float) and (value != value):
         return None
     return value
 
@@ -107,16 +146,16 @@ def _build_response(
     suspicious_accounts: List[dict] = []
     for _, row in scores_df.iterrows():
         suspicious_accounts.append({
-            "account_id"   : row["account_id"],
-            "ring_id"      : row["ring_id"],
-            "score"        : _nan_to_none(row["score"]),
+            "account_id"   : str(row["account_id"]),
+            "ring_id"      : str(row["ring_id"]) if row["ring_id"] is not None else None,
+            "score"        : _nan_to_none(float(row["score"])) if row["score"] is not None else None,
             "skipped"      : bool(row["skipped"]),
             "has_cycle"    : bool(row["has_cycle"]),
             "has_fan"      : bool(row["has_fan"]),
             "has_shell"    : bool(row["has_shell"]),
             "has_velocity" : bool(row["has_velocity"]),
             "total_txns"   : int(row["total_txns"]),
-            "reasons"      : row["reasons"],
+            "reasons"      : str(row["reasons"]),
         })
 
     # ── fraud_rings ───────────────────────────────────────────────────────────
@@ -127,9 +166,9 @@ def _build_response(
         fraud_rings[ring_id] = {
             "ring_id"      : ring_id,
             "type"         : "CYCLE",
-            "accounts"     : c["accounts"],
-            "total_amount" : c["total_amount"],
-            "tx_ids"       : c["tx_ids"],
+            "accounts"     : [str(a) for a in c["accounts"]],
+            "total_amount" : float(c["total_amount"]),
+            "tx_ids"       : [str(t) for t in c["tx_ids"]],
             "cycle_length" : len(c["cycle"]),
         }
 
@@ -138,12 +177,12 @@ def _build_response(
         fraud_rings[ring_id] = {
             "ring_id"            : ring_id,
             "type"               : f.get("pattern", "FAN"),
-            "accounts"           : [f["account_id"]],
-            "total_amount"       : f.get("total_amount", 0.0),
-            "tx_ids"             : f.get("tx_ids", []),
-            "counterparty_count" : f.get("counterparty_count"),
-            "window_start"       : f.get("window_start"),
-            "window_end"         : f.get("window_end"),
+            "accounts"           : [str(f["account_id"])],
+            "total_amount"       : float(f.get("total_amount", 0.0)),
+            "tx_ids"             : [str(t) for t in f.get("tx_ids", [])],
+            "counterparty_count" : int(f["counterparty_count"]) if f.get("counterparty_count") is not None else None,
+            "window_start"       : str(f["window_start"]) if f.get("window_start") else None,
+            "window_end"         : str(f["window_end"])   if f.get("window_end")   else None,
         }
 
     for s in shells:
@@ -151,10 +190,10 @@ def _build_response(
         fraud_rings[ring_id] = {
             "ring_id"      : ring_id,
             "type"         : "SHELL",
-            "accounts"     : s["accounts"],
-            "total_amount" : s["total_amount"],
-            "tx_ids"       : s["tx_ids"],
-            "hops"         : s["hops"],
+            "accounts"     : [str(a) for a in s["accounts"]],
+            "total_amount" : float(s["total_amount"]),
+            "tx_ids"       : [str(t) for t in s["tx_ids"]],
+            "hops"         : int(s["hops"]),
         }
 
     # ── summary ───────────────────────────────────────────────────────────────
@@ -269,7 +308,13 @@ async def analyze(
         )
 
     # ── 5. Build response ─────────────────────────────────────────────────────
-    result = _build_response(engine, scorer, scores_df, cycles, fans, shells)
+    try:
+        result = _safe(_build_response(engine, scorer, scores_df, cycles, fans, shells))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Response serialization error: {exc}\n{traceback.format_exc()}",
+        )
 
     # ── 6. Save results.json locally ─────────────────────────────────────────
     try:
@@ -278,7 +323,6 @@ async def analyze(
             encoding="utf-8",
         )
     except Exception as exc:
-        # Non-fatal — log but don't fail the request
         print(f"[WARN] Could not save results.json: {exc}")
 
     return JSONResponse(content=result)

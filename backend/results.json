@@ -1,20 +1,8 @@
 {
   "suspicious_accounts": [
     {
-      "account_id": "ACC_MERCHANT",
-      "ring_id": "FAN-OUT-0001",
-      "score": 49.0,
-      "skipped": false,
-      "has_cycle": false,
-      "has_fan": true,
-      "has_shell": false,
-      "has_velocity": true,
-      "total_txns": 20,
-      "reasons": "FAN-OUT pattern (20 counterparties in 72h)"
-    },
-    {
       "account_id": "ACC_HUB",
-      "ring_id": "FAN-IN-0002",
+      "ring_id": "FAN-IN-0001",
       "score": 49.0,
       "skipped": false,
       "has_cycle": false,
@@ -25,28 +13,16 @@
       "reasons": "FAN-IN pattern (12 counterparties in 72h)"
     },
     {
-      "account_id": "ACC_D",
-      "ring_id": "CYCLE-0001",
-      "score": 40.0,
+      "account_id": "ACC_MERCHANT",
+      "ring_id": "FAN-OUT-0002",
+      "score": 49.0,
       "skipped": false,
-      "has_cycle": true,
-      "has_fan": false,
+      "has_cycle": false,
+      "has_fan": true,
       "has_shell": false,
-      "has_velocity": false,
-      "total_txns": 2,
-      "reasons": "Participates in transaction cycle CYCLE-0001"
-    },
-    {
-      "account_id": "ACC_E",
-      "ring_id": "CYCLE-0001",
-      "score": 40.0,
-      "skipped": false,
-      "has_cycle": true,
-      "has_fan": false,
-      "has_shell": false,
-      "has_velocity": false,
-      "total_txns": 2,
-      "reasons": "Participates in transaction cycle CYCLE-0001"
+      "has_velocity": true,
+      "total_txns": 20,
+      "reasons": "FAN-OUT pattern (20 counterparties in 72h)"
     },
     {
       "account_id": "ACC_F",
@@ -62,6 +38,30 @@
     },
     {
       "account_id": "ACC_G",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_D",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_E",
       "ring_id": "CYCLE-0001",
       "score": 40.0,
       "skipped": false,
@@ -162,17 +162,17 @@
       "ring_id": "CYCLE-0001",
       "type": "CYCLE",
       "accounts": [
-        "ACC_D",
-        "ACC_E",
         "ACC_F",
-        "ACC_G"
+        "ACC_G",
+        "ACC_D",
+        "ACC_E"
       ],
       "total_amount": 11400.0,
       "tx_ids": [
-        "TXN_004",
-        "TXN_005",
         "TXN_006",
-        "TXN_007"
+        "TXN_007",
+        "TXN_004",
+        "TXN_005"
       ],
       "cycle_length": 4
     },
@@ -192,13 +192,38 @@
       ],
       "cycle_length": 3
     },
-    "FAN-OUT-0001": {
-      "ring_id": "FAN-OUT-0001",
+    "FAN-IN-0001": {
+      "ring_id": "FAN-IN-0001",
+      "type": "FAN-IN",
+      "accounts": [
+        "ACC_HUB"
+      ],
+      "total_amount": 5930.0,
+      "tx_ids": [
+        "TXN_008",
+        "TXN_009",
+        "TXN_010",
+        "TXN_011",
+        "TXN_012",
+        "TXN_013",
+        "TXN_014",
+        "TXN_015",
+        "TXN_016",
+        "TXN_017",
+        "TXN_018",
+        "TXN_019"
+      ],
+      "counterparty_count": 12,
+      "window_start": "2024-01-03 08:00:00",
+      "window_end": "2024-01-06 08:00:00"
+    },
+    "FAN-OUT-0002": {
+      "ring_id": "FAN-OUT-0002",
       "type": "FAN-OUT",
       "accounts": [
         "ACC_MERCHANT"
       ],
-      "total_amount": "4100",
+      "total_amount": 4100.0,
       "tx_ids": [
         "TXN_023",
         "TXN_024",
@@ -225,31 +250,6 @@
       "window_start": "2024-01-01 08:00:00",
       "window_end": "2024-01-04 08:00:00"
     },
-    "FAN-IN-0002": {
-      "ring_id": "FAN-IN-0002",
-      "type": "FAN-IN",
-      "accounts": [
-        "ACC_HUB"
-      ],
-      "total_amount": "5930",
-      "tx_ids": [
-        "TXN_008",
-        "TXN_009",
-        "TXN_010",
-        "TXN_011",
-        "TXN_012",
-        "TXN_013",
-        "TXN_014",
-        "TXN_015",
-        "TXN_016",
-        "TXN_017",
-        "TXN_018",
-        "TXN_019"
-      ],
-      "counterparty_count": 12,
-      "window_start": "2024-01-03 08:00:00",
-      "window_end": "2024-01-06 08:00:00"
-    },
     "SHELL-0001": {
       "ring_id": "SHELL-0001",
       "type": "SHELL",
@@ -269,7 +269,7 @@
     }
   },
   "summary": {
-    "analysed_at": "2026-02-19T12:14:01.454143+00:00",
+    "analysed_at": "2026-02-19T12:54:57.756365+00:00",
     "total_transactions": 50,
     "total_accounts": 63,
     "suspicious_accounts": 13,
@@ -277,8 +277,8 @@
     "fraud_rings_detected": 5,
     "rings_by_type": {
       "CYCLE": 2,
-      "FAN-OUT": 1,
       "FAN-IN": 1,
+      "FAN-OUT": 1,
       "SHELL": 1
     },
     "cycles_detected": 2,
