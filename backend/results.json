@@ -1,0 +1,296 @@
+{
+  "suspicious_accounts": [
+    {
+      "account_id": "ACC_MERCHANT",
+      "ring_id": "FAN-OUT-0001",
+      "score": 49.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": true,
+      "has_shell": false,
+      "has_velocity": true,
+      "total_txns": 20,
+      "reasons": "FAN-OUT pattern (20 counterparties in 72h)"
+    },
+    {
+      "account_id": "ACC_HUB",
+      "ring_id": "FAN-IN-0002",
+      "score": 49.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": true,
+      "has_shell": false,
+      "has_velocity": true,
+      "total_txns": 12,
+      "reasons": "FAN-IN pattern (12 counterparties in 72h)"
+    },
+    {
+      "account_id": "ACC_D",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_E",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_F",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_G",
+      "ring_id": "CYCLE-0001",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0001"
+    },
+    {
+      "account_id": "ACC_A",
+      "ring_id": "CYCLE-0002",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0002"
+    },
+    {
+      "account_id": "ACC_B",
+      "ring_id": "CYCLE-0002",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0002"
+    },
+    {
+      "account_id": "ACC_C",
+      "ring_id": "CYCLE-0002",
+      "score": 40.0,
+      "skipped": false,
+      "has_cycle": true,
+      "has_fan": false,
+      "has_shell": false,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Participates in transaction cycle CYCLE-0002"
+    },
+    {
+      "account_id": "ACC_SHELL1",
+      "ring_id": "SHELL-0001",
+      "score": 20.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": false,
+      "has_shell": true,
+      "has_velocity": false,
+      "total_txns": 1,
+      "reasons": "Shell network chain SHELL-0001 (length 4)"
+    },
+    {
+      "account_id": "ACC_SHELL2",
+      "ring_id": "SHELL-0001",
+      "score": 20.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": false,
+      "has_shell": true,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Shell network chain SHELL-0001 (length 4)"
+    },
+    {
+      "account_id": "ACC_SHELL3",
+      "ring_id": "SHELL-0001",
+      "score": 20.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": false,
+      "has_shell": true,
+      "has_velocity": false,
+      "total_txns": 2,
+      "reasons": "Shell network chain SHELL-0001 (length 4)"
+    },
+    {
+      "account_id": "ACC_FINAL",
+      "ring_id": "SHELL-0001",
+      "score": 20.0,
+      "skipped": false,
+      "has_cycle": false,
+      "has_fan": false,
+      "has_shell": true,
+      "has_velocity": false,
+      "total_txns": 1,
+      "reasons": "Shell network chain SHELL-0001 (length 4)"
+    }
+  ],
+  "fraud_rings": {
+    "CYCLE-0001": {
+      "ring_id": "CYCLE-0001",
+      "type": "CYCLE",
+      "accounts": [
+        "ACC_D",
+        "ACC_E",
+        "ACC_F",
+        "ACC_G"
+      ],
+      "total_amount": 11400.0,
+      "tx_ids": [
+        "TXN_004",
+        "TXN_005",
+        "TXN_006",
+        "TXN_007"
+      ],
+      "cycle_length": 4
+    },
+    "CYCLE-0002": {
+      "ring_id": "CYCLE-0002",
+      "type": "CYCLE",
+      "accounts": [
+        "ACC_A",
+        "ACC_B",
+        "ACC_C"
+      ],
+      "total_amount": 14400.0,
+      "tx_ids": [
+        "TXN_001",
+        "TXN_002",
+        "TXN_003"
+      ],
+      "cycle_length": 3
+    },
+    "FAN-OUT-0001": {
+      "ring_id": "FAN-OUT-0001",
+      "type": "FAN-OUT",
+      "accounts": [
+        "ACC_MERCHANT"
+      ],
+      "total_amount": "4100",
+      "tx_ids": [
+        "TXN_023",
+        "TXN_024",
+        "TXN_025",
+        "TXN_026",
+        "TXN_027",
+        "TXN_028",
+        "TXN_029",
+        "TXN_030",
+        "TXN_031",
+        "TXN_032",
+        "TXN_033",
+        "TXN_034",
+        "TXN_035",
+        "TXN_036",
+        "TXN_037",
+        "TXN_038",
+        "TXN_039",
+        "TXN_040",
+        "TXN_041",
+        "TXN_042"
+      ],
+      "counterparty_count": 20,
+      "window_start": "2024-01-01 08:00:00",
+      "window_end": "2024-01-04 08:00:00"
+    },
+    "FAN-IN-0002": {
+      "ring_id": "FAN-IN-0002",
+      "type": "FAN-IN",
+      "accounts": [
+        "ACC_HUB"
+      ],
+      "total_amount": "5930",
+      "tx_ids": [
+        "TXN_008",
+        "TXN_009",
+        "TXN_010",
+        "TXN_011",
+        "TXN_012",
+        "TXN_013",
+        "TXN_014",
+        "TXN_015",
+        "TXN_016",
+        "TXN_017",
+        "TXN_018",
+        "TXN_019"
+      ],
+      "counterparty_count": 12,
+      "window_start": "2024-01-03 08:00:00",
+      "window_end": "2024-01-06 08:00:00"
+    },
+    "SHELL-0001": {
+      "ring_id": "SHELL-0001",
+      "type": "SHELL",
+      "accounts": [
+        "ACC_SHELL1",
+        "ACC_SHELL2",
+        "ACC_SHELL3",
+        "ACC_FINAL"
+      ],
+      "total_amount": 23400.0,
+      "tx_ids": [
+        "TXN_020",
+        "TXN_021",
+        "TXN_022"
+      ],
+      "hops": 3
+    }
+  },
+  "summary": {
+    "analysed_at": "2026-02-19T12:14:01.454143+00:00",
+    "total_transactions": 50,
+    "total_accounts": 63,
+    "suspicious_accounts": 13,
+    "skipped_accounts": 0,
+    "fraud_rings_detected": 5,
+    "rings_by_type": {
+      "CYCLE": 2,
+      "FAN-OUT": 1,
+      "FAN-IN": 1,
+      "SHELL": 1
+    },
+    "cycles_detected": 2,
+    "fan_patterns_detected": 2,
+    "shell_chains_detected": 1,
+    "score_distribution": {
+      "max": 49.0,
+      "mean": 35.23076923076923,
+      "min": 20.0,
+      "high_risk_count": 0,
+      "medium_risk_count": 9,
+      "low_risk_count": 4
+    }
+  }
+}
