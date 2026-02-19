@@ -1,0 +1,43 @@
+# =============================================================================
+# requirements.txt — Fraud Detection FastAPI Backend
+# =============================================================================
+# Install:  pip install -r requirements.txt
+# Python:   >= 3.11  (uses sys.stdlib_module_names, match-stmt, tomllib, etc.)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Web framework
+# -----------------------------------------------------------------------------
+fastapi==0.115.6            # ASGI framework + OpenAPI docs at /docs
+starlette==0.41.3           # FastAPI's transport layer (pinned for ABI compat)
+pydantic==2.10.4            # Request/response validation (FastAPI v2 requires v2)
+
+# -----------------------------------------------------------------------------
+# ASGI server
+# -----------------------------------------------------------------------------
+uvicorn==0.34.0             # Production-grade ASGI server
+anyio==4.8.0                # Async I/O backend used by uvicorn + starlette
+
+# -----------------------------------------------------------------------------
+# File upload support
+# -----------------------------------------------------------------------------
+python-multipart==0.0.20    # Required by FastAPI to parse multipart/form-data
+                            # (UploadFile / File(...) will raise 422 without it)
+
+# -----------------------------------------------------------------------------
+# Graph analysis
+# -----------------------------------------------------------------------------
+networkx==3.4.2             # Directed graph, simple_cycles, successor traversal
+
+# -----------------------------------------------------------------------------
+# Data processing
+# -----------------------------------------------------------------------------
+pandas==2.2.2               # DataFrame I/O, rolling windows, groupby
+numpy==1.26.4               # Pandas hard dependency; pinned for ABI stability
+
+# -----------------------------------------------------------------------------
+# Testing
+# -----------------------------------------------------------------------------
+httpx==0.28.1               # AsyncClient / TestClient for FastAPI integration tests
+pytest==8.3.4               # Test runner
+pytest-asyncio==0.25.2      # async def test_ support
