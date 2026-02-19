@@ -2,86 +2,87 @@
 suspicion_scorer.py
 ===================
 Scores each suspicious account detected by FraudDetectionEngine on a
-0–100 float scale using the following additive formula:
+0-100 float scale.
 
-    +40   — cycle participation
-    +30   — fan-in or fan-out  (×1.3 if the window is ≤ 72 hours)
-    +20   — shell-network membership
-    +10   — high velocity  (≥ velocity_threshold distinct txns in 24 h)
-    ────
-    Cap at 100.0
+PROPORTIONAL SCORING MODEL
+──────────────────────────
+Scores reflect SEVERITY, not just presence of a pattern.
 
-Accounts with 50+ total transactions are SKIPPED entirely (score = None).
+  CYCLE  (base 30, up to 45)
+    +3 per extra node beyond 3-node minimum
+    3-node→30  4-node→33  5-node→36  6-node→39 …
 
-Usage
------
-    from fraud_detection_engine import FraudDetectionEngine
-    from suspicion_scorer import SuspicionScorer
+  FAN-IN / FAN-OUT  (base 20, up to 45, then ×1.3 if window ≤ 72h)
+    +1 per counterparty above the detection threshold (10)
+    12 counterparties in 72h → (20+2)×1.3 = 28.6
+    20 counterparties in 72h → (20+10)×1.3 = 39.0
 
-    engine  = FraudDetectionEngine(df)
-    summary = engine.analyse(...)          # populates engine._suspicious
+  SHELL  (base 15, up to 35)
+    +4 per hop above the minimum (3 hops)
+    3-hop→15  4-hop→19  5-hop→23  6-hop→27 …
 
-    scorer  = SuspicionScorer(engine)
-    scores  = scorer.score_all()           # → pd.DataFrame
-    print(scores)
+  VELOCITY  (base 5, up to 15)
+    +1 per txn above the velocity threshold in the 24-h window
+
+Total capped at 100. Accounts with ≥50 total txns are SKIPPED (score=None).
 """
 
 from __future__ import annotations
 
-import math
+import re
 from collections import defaultdict
 from datetime import timedelta
 from typing import Dict, Optional
 
 import pandas as pd
 
-# ── Scoring weights ────────────────────────────────────────────────────────────
-_W_CYCLE    = 40.0   # ring / cycle participation
-_W_FAN      = 30.0   # fan-in or fan-out pattern base
-_FAN_MULT   = 1.3    # multiplier when fan window ≤ 72 h
-_FAN_72H    = 72     # threshold in hours for the multiplier
-_W_SHELL    = 20.0   # shell-network chain membership
-_W_VELOCITY = 10.0   # high-velocity burst
-_SCORE_CAP  = 100.0
-_TX_SKIP    = 50     # accounts with ≥ this many total txns are skipped
+# ── Weights ────────────────────────────────────────────────────────────────────
+_BASE_CYCLE     = 30.0
+_PER_CYCLE_NODE = 3.0
+_MAX_CYCLE      = 45.0
+
+_BASE_FAN       = 20.0
+_PER_COUNTERP   = 1.0
+_FAN_THRESHOLD  = 10
+_MAX_FAN_BASE   = 45.0   # cap before multiplier
+_FAN_MULT       = 1.3
+_FAN_72H        = 72
+
+_BASE_SHELL     = 15.0
+_PER_HOP        = 4.0
+_MIN_HOPS       = 3
+_MAX_SHELL      = 35.0
+
+_BASE_VELOCITY  = 5.0
+_PER_VEL_TXN    = 1.0
+_MAX_VELOCITY   = 15.0
+
+_SCORE_CAP      = 100.0
+_TX_SKIP        = 50
 
 
 class SuspicionScorer:
     """
-    Scores accounts flagged by a :class:`FraudDetectionEngine` run.
+    Proportional suspicion scorer for accounts flagged by FraudDetectionEngine.
 
     Parameters
     ----------
     engine : FraudDetectionEngine
-        A fully initialised engine on which ``analyse()`` (or individual
-        ``detect_*`` methods) has already been called.
-    velocity_threshold : int
-        Minimum number of distinct transactions within any 24-hour window
-        that triggers the +10 velocity bonus.  Default: 5.
-    fan_window_hours : int
-        The rolling window (hours) used by ``detect_fan_in_out``.  Used to
-        decide whether the 1.3× multiplier applies.  Default: 72.
+    velocity_threshold : int   Min txns in 24h window to trigger velocity bonus (default 5)
+    fan_window_hours : int     Fan detection window, used for 1.3x multiplier (default 72)
     """
 
-    def __init__(
-        self,
-        engine,                        # FraudDetectionEngine instance
-        velocity_threshold: int = 5,
-        fan_window_hours: int = 72,
-    ):
+    def __init__(self, engine, velocity_threshold: int = 5, fan_window_hours: int = 72):
         self.engine             = engine
         self.velocity_threshold = velocity_threshold
         self.fan_window_hours   = fan_window_hours
 
-        # Pre-compute per-account transaction count once
-        self._tx_count: Dict[str, int] = self._build_tx_counts()
-        # Pre-compute per-account velocity flag once
-        self._velocity_hit: Dict[str, bool] = self._build_velocity_flags()
+        self._tx_count: Dict[str, int]    = self._build_tx_counts()
+        self._velocity_data: Dict[str, int] = self._build_velocity_data()
 
-    # ── Private helpers ────────────────────────────────────────────────────────
+    # ── Private ────────────────────────────────────────────────────────────────
 
     def _build_tx_counts(self) -> Dict[str, int]:
-        """Total transactions (as sender OR receiver) per account."""
         counts: Dict[str, int] = defaultdict(int)
         df = self.engine.df
         for col in ("sender_id", "receiver_id"):
@@ -89,260 +90,194 @@ class SuspicionScorer:
                 counts[acct] += 1
         return counts
 
-    def _build_velocity_flags(self) -> Dict[str, bool]:
-        """
-        For every account, check whether it appears in ≥ velocity_threshold
-        distinct transactions within any rolling 24-hour window.
-        """
-        df = self.engine.df.sort_values("timestamp")
+    def _build_velocity_data(self) -> Dict[str, int]:
+        """Return max txns seen in any 24-h window per account (0 if below threshold)."""
+        df     = self.engine.df.sort_values("timestamp")
         window = timedelta(hours=24)
-        flagged: Dict[str, bool] = {}
-
-        all_accounts = set(df["sender_id"].astype(str)) | set(
-            df["receiver_id"].astype(str)
-        )
+        result: Dict[str, int] = {}
+        all_accounts = set(df["sender_id"].astype(str)) | set(df["receiver_id"].astype(str))
 
         for acct in all_accounts:
-            mask = (df["sender_id"].astype(str) == acct) | (
-                df["receiver_id"].astype(str) == acct
-            )
-            sub = df[mask].reset_index(drop=True)
-            hit = False
-            for i, ts in enumerate(sub["timestamp"]):
-                window_end = ts + window
-                count = ((sub["timestamp"] >= ts) & (sub["timestamp"] <= window_end)).sum()
-                if count >= self.velocity_threshold:
-                    hit = True
-                    break
-            flagged[acct] = hit
+            mask = (df["sender_id"].astype(str) == acct) | (df["receiver_id"].astype(str) == acct)
+            sub  = df[mask].reset_index(drop=True)
+            peak = 0
+            for ts in sub["timestamp"]:
+                count = int(((sub["timestamp"] >= ts) & (sub["timestamp"] <= ts + window)).sum())
+                if count > peak:
+                    peak = count
+            result[acct] = peak if peak >= self.velocity_threshold else 0
+        return result
 
-        return flagged
+    def _parse_fan_info(self, reasons: list) -> tuple:
+        """Return (counterparty_count, window_hours) from reason string, or (0,0)."""
+        for r in reasons:
+            m = re.search(r'(\d+)\s+counterparties\s+in\s+(\d+)h', r)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+        return 0, 0
 
-    def _parse_fan_window(self, reasons: list[str]) -> Optional[int]:
-        """
-        Extract the window size (hours) from a fan-in/out reason string.
-        Returns None if not found.  Reason format:
-            "FAN-IN pattern (N counterparties in Xh)"
-        """
-        for reason in reasons:
-            if "FAN-" in reason and "in " in reason and "h)" in reason:
-                try:
-                    part = reason.split("in ")[-1].rstrip("h)")
-                    return int(part)
-                except ValueError:
-                    pass
-        return None
+    def _parse_shell_length(self, reasons: list) -> int:
+        """Return chain length from shell reason string, or 0."""
+        for r in reasons:
+            m = re.search(r'length\s+(\d+)', r, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+        return 0
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+    def _parse_cycle_length(self, account_id: str) -> int:
+        """Look up cycle_length stored in _suspicious extra, default 3."""
+        return int(self.engine._suspicious.get(account_id, {}).get("cycle_length", 3))
+
+    # ── Public ─────────────────────────────────────────────────────────────────
 
     def score_account(self, account_id: str) -> Optional[float]:
-        """
-        Compute the suspicion score for a single account.
-
-        Returns
-        -------
-        float in [0.0, 100.0], or ``None`` if the account has 50+ total
-        transactions (ineligible) or is not flagged at all.
-        """
-        # --- eligibility gate ------------------------------------------------
-        total_txns = self._tx_count.get(account_id, 0)
-        if total_txns >= _TX_SKIP:
-            return None  # too active to be a targeted shell / ring participant
+        """Return proportional score 0-100, or None if account is skipped."""
+        if self._tx_count.get(account_id, 0) >= _TX_SKIP:
+            return None
 
         info = self.engine._suspicious.get(account_id)
         if info is None:
-            return 0.0  # not flagged — clean score
+            return 0.0
 
-        reasons: list[str] = info.get("reasons", [])
-        score = 0.0
+        reasons = info.get("reasons", [])
+        score   = 0.0
 
-        # --- +40 cycle -------------------------------------------------------
-        has_cycle = any("cycle" in r.lower() for r in reasons)
-        if has_cycle:
-            score += _W_CYCLE
+        # CYCLE — proportional to cycle length
+        if any("cycle" in r.lower() for r in reasons):
+            length      = self._parse_cycle_length(account_id)
+            extra_nodes = max(0, length - 3)
+            score      += min(_BASE_CYCLE + extra_nodes * _PER_CYCLE_NODE, _MAX_CYCLE)
 
-        # --- +30 fan-in / fan-out (×1.3 if window ≤ 72 h) -------------------
-        has_fan = any("fan-" in r.lower() for r in reasons)
-        if has_fan:
-            fan_hours = self._parse_fan_window(reasons)
-            fan_score = _W_FAN
-            if fan_hours is not None and fan_hours <= _FAN_72H:
+        # FAN — proportional to counterparty count
+        if any("fan-" in r.lower() for r in reasons):
+            cp, hours   = self._parse_fan_info(reasons)
+            extra_cp    = max(0, cp - _FAN_THRESHOLD)
+            fan_score   = min(_BASE_FAN + extra_cp * _PER_COUNTERP, _MAX_FAN_BASE)
+            if hours > 0 and hours <= _FAN_72H:
                 fan_score *= _FAN_MULT
             score += fan_score
 
-        # --- +20 shell -------------------------------------------------------
-        has_shell = any("shell" in r.lower() for r in reasons)
-        if has_shell:
-            score += _W_SHELL
+        # SHELL — proportional to hop depth
+        if any("shell" in r.lower() for r in reasons):
+            chain_len   = self._parse_shell_length(reasons)
+            hops        = max(0, chain_len - 1)        # length 5 = 4 hops
+            extra_hops  = max(0, hops - _MIN_HOPS)
+            score      += min(_BASE_SHELL + extra_hops * _PER_HOP, _MAX_SHELL)
 
-        # --- +10 velocity ----------------------------------------------------
-        if self._velocity_hit.get(account_id, False):
-            score += _W_VELOCITY
+        # VELOCITY — proportional to burst intensity
+        vel = self._velocity_data.get(account_id, 0)
+        if vel >= self.velocity_threshold:
+            extra_vel = max(0, vel - self.velocity_threshold)
+            score    += min(_BASE_VELOCITY + extra_vel * _PER_VEL_TXN, _MAX_VELOCITY)
 
-        return round(min(score, _SCORE_CAP), 4)
+        return round(min(score, _SCORE_CAP), 2)
 
     def score_all(self) -> pd.DataFrame:
-        """
-        Score every account known to the engine's last detection run.
-
-        Accounts with 50+ transactions are included in the output with
-        ``score=None`` and ``skipped=True`` for full auditability.
-
-        Returns
-        -------
-        pd.DataFrame sorted by score descending with columns:
-            account_id, ring_id, score, skipped,
-            has_cycle, has_fan, has_shell, has_velocity,
-            total_txns, reasons
-        """
+        """Score all flagged accounts; return DataFrame sorted by score desc."""
         records = []
-
         for account_id, info in self.engine._suspicious.items():
             total_txns = self._tx_count.get(account_id, 0)
             skipped    = total_txns >= _TX_SKIP
             score      = None if skipped else self.score_account(account_id)
+            reasons    = info.get("reasons", [])
 
-            reasons: list[str] = info.get("reasons", [])
-            records.append(
-                {
-                    "account_id"   : account_id,
-                    "ring_id"      : info.get("ring_id"),
-                    "score"        : score,
-                    "skipped"      : skipped,
-                    "has_cycle"    : any("cycle" in r.lower() for r in reasons),
-                    "has_fan"      : any("fan-"  in r.lower() for r in reasons),
-                    "has_shell"    : any("shell" in r.lower() for r in reasons),
-                    "has_velocity" : self._velocity_hit.get(account_id, False),
-                    "total_txns"   : total_txns,
-                    "reasons"      : "; ".join(reasons),
-                }
-            )
+            cp, fh  = self._parse_fan_info(reasons)
+            clen    = self._parse_cycle_length(account_id) if any("cycle" in r.lower() for r in reasons) else None
+            slen    = self._parse_shell_length(reasons) or None
+            vel     = self._velocity_data.get(account_id, 0)
+
+            records.append({
+                "account_id"    : account_id,
+                "ring_id"       : info.get("ring_id"),
+                "score"         : score,
+                "skipped"       : skipped,
+                "has_cycle"     : any("cycle" in r.lower() for r in reasons),
+                "has_fan"       : any("fan-"  in r.lower() for r in reasons),
+                "has_shell"     : any("shell" in r.lower() for r in reasons),
+                "has_velocity"  : vel >= self.velocity_threshold,
+                "cycle_length"  : clen,
+                "counterparties": cp or None,
+                "chain_length"  : slen,
+                "velocity_txns" : vel if vel >= self.velocity_threshold else 0,
+                "total_txns"    : total_txns,
+                "reasons"       : "; ".join(reasons),
+            })
 
         df_out = pd.DataFrame(records)
         if df_out.empty:
             return df_out
-
-        # Sort: non-skipped first (highest score first), then skipped
-        df_out = df_out.sort_values(
-            ["skipped", "score"], ascending=[True, False]
-        ).reset_index(drop=True)
-
-        return df_out
+        return df_out.sort_values(["skipped", "score"], ascending=[True, False]).reset_index(drop=True)
 
     def report(self) -> str:
-        """
-        Human-readable scoring report for the terminal.
-        """
-        df = self.score_all()
+        df  = self.score_all()
         if df.empty:
             return "No suspicious accounts to score."
-
-        sep = "─" * 72
+        sep = "─" * 82
         lines = [
             sep,
-            f"{'SUSPICION SCORER REPORT':^72}",
+            f"{'SUSPICION SCORER  ·  PROPORTIONAL MODEL':^82}",
             sep,
-            f"  Velocity threshold : ≥{self.velocity_threshold} txns in 24 h  →  +{_W_VELOCITY:.0f} pts",
-            f"  Fan multiplier     : ×{_FAN_MULT} when window ≤ {_FAN_72H} h",
-            f"  Skip gate          : accounts with ≥ {_TX_SKIP} total txns",
+            f"  Cycle    : base {_BASE_CYCLE:.0f}  + {_PER_CYCLE_NODE:.0f}/extra node   (cap {_MAX_CYCLE:.0f})",
+            f"  Fan      : base {_BASE_FAN:.0f}  + {_PER_COUNTERP:.0f}/extra cp  × 1.3 if ≤72h  (cap {_MAX_FAN_BASE:.0f}×1.3={_MAX_FAN_BASE*_FAN_MULT:.0f})",
+            f"  Shell    : base {_BASE_SHELL:.0f}  + {_PER_HOP:.0f}/extra hop  (cap {_MAX_SHELL:.0f})",
+            f"  Velocity : base {_BASE_VELOCITY:.0f}  + {_PER_VEL_TXN:.0f}/extra txn  (cap {_MAX_VELOCITY:.0f})",
+            f"  Skip gate: >= {_TX_SKIP} total txns",
             sep,
-            f"{'ACCOUNT':<14} {'RING_ID':<14} {'SCORE':>7}  {'C':>2} {'F':>2} {'SH':>2} {'V':>2}  {'TXNS':>5}  NOTES",
+            f"{'ACCOUNT':<16} {'RING_ID':<16} {'SCORE':>6}  C  F SH  V  SEVERITY DETAIL",
             sep,
         ]
-
         for _, row in df.iterrows():
-            score_str = f"{row['score']:6.1f}" if row["score"] is not None else "  SKIP"
-            flags = (
-                f"{'✓' if row['has_cycle']    else '·':>2} "
-                f"{'✓' if row['has_fan']      else '·':>2} "
-                f"{'✓' if row['has_shell']    else '·':>2} "
-                f"{'✓' if row['has_velocity'] else '·':>2}"
+            ss = f"{row['score']:6.1f}" if row["score"] is not None else "  SKIP"
+            fl = (
+                f"{'✓' if row['has_cycle']    else '·'} "
+                f"{'✓' if row['has_fan']      else '·'} "
+                f"{'✓' if row['has_shell']    else '·'} "
+                f"{'✓' if row['has_velocity'] else '·'}"
             )
-            notes = "SKIPPED (≥50 txns)" if row["skipped"] else ""
-            lines.append(
-                f"{str(row['account_id']):<14} {str(row['ring_id']):<14} "
-                f"{score_str}  {flags}  {row['total_txns']:>5}  {notes}"
-            )
-
-        lines += [
-            sep,
-            "  Flags:  C=cycle  F=fan-in/out  SH=shell  V=velocity",
-            sep,
-        ]
+            detail = []
+            cl = row["cycle_length"]
+            if cl and str(cl) != "nan": detail.append(f"{int(cl)}-node cycle")
+            cp = row["counterparties"]
+            if cp and str(cp) != "nan": detail.append(f"{int(cp)} counterparties")
+            sl = row["chain_length"]
+            if sl and str(sl) != "nan": detail.append(f"{int(sl)-1}-hop shell")
+            if row["velocity_txns"]:  detail.append(f"{row['velocity_txns']} txns/24h")
+            if row["skipped"]:        detail.append("SKIPPED")
+            lines.append(f"{str(row['account_id']):<16} {str(row['ring_id']):<16} {ss}  {fl}  {'  '.join(detail)}")
+        lines += [sep, "  C=cycle  F=fan  SH=shell  V=velocity", sep]
         return "\n".join(lines)
 
 
 # ── Demo ───────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    import random
+    import sys, os, random
     from datetime import datetime
-
-    # We import locally so the file can be run standalone alongside the engine
-    import sys, os
     sys.path.insert(0, os.path.dirname(__file__))
     from graph_engine import FraudDetectionEngine
 
-    random.seed(99)
+    random.seed(42)
     base = datetime(2024, 3, 1)
+    rows, _tid = [], [1]
 
-    rows = []
-    _tid = [1]  # mutable container to allow mutation from inner scope
-
-    def tx(src, dst, amount, hours_offset):
-        rows.append(dict(
-            transaction_id=f"T{_tid[0]:04d}",
-            sender_id=src,
-            receiver_id=dst,
-            amount=round(amount, 2),
-            timestamp=base + timedelta(hours=hours_offset),
-        ))
+    def tx(s, d, amt, h):
+        rows.append(dict(transaction_id=f"T{_tid[0]:04d}", sender_id=s, receiver_id=d,
+                         amount=round(amt,2), timestamp=base+timedelta(hours=h)))
         _tid[0] += 1
 
-    # ── Pattern 1: clean cycle  A→B→C→A  ─────────────────────────────────────
-    tx("A", "B", 4_200,  1)
-    tx("B", "C", 3_800,  2)
-    tx("C", "A", 3_500,  3)
-
-    # ── Pattern 2: fan-in into HUB within 72 h  ──────────────────────────────
-    for i in range(12):
-        tx(f"FSRC{i}", "HUB", random.uniform(500, 2_000), i * 4)
-
-    # ── Pattern 3: shell chain  S1→S2→S3→S4  ────────────────────────────────
-    tx("S1", "S2", 900,  50)
-    tx("S2", "S3", 850,  51)
-    tx("S3", "S4", 800,  52)
-
-    # ── Pattern 4: COMBO account that hits cycle + velocity  ─────────────────
-    # COMBO participates in a cycle and also fires 6 rapid txns in 24 h
-    tx("COMBO", "X",     1_000, 10)
-    tx("X",     "Y",     1_000, 11)
-    tx("Y",     "COMBO", 1_000, 12)   # closes the cycle
-    for h in range(6):                 # rapid burst → velocity flag
-        tx("COMBO", f"VDST{h}", 200, 10 + h * 2)
-
-    # ── Pattern 5: HIGH-VOLUME account (≥50 txns) → should be SKIPPED ────────
-    for i in range(55):
-        tx("WHALE", f"W_DST{i}", 100, i)
+    tx("A","B",1000,1); tx("B","C",1000,2); tx("C","A",1000,3)                       # 3-node cycle → 30
+    tx("P","Q",2000,1); tx("Q","R",2000,2); tx("R","S",2000,3)                        # 3-node cycle → 30
+    tx("S","T",2000,4); tx("T","P",2000,5)                                             # makes it 5-node → 36
+    for i in range(12): tx(f"F{i}","HUB",500,i*4)                                     # fan-in 12 cp → 28.6
+    for i in range(20): tx("DIST",f"D{i}",300,i*3)                                    # fan-out 20 cp → 52.0
+    tx("S1","S2",900,50); tx("S2","S3",850,51); tx("S3","S4",800,52)                   # 3-hop shell → 15
+    tx("L1","L2",900,60); tx("L2","L3",800,61); tx("L3","L4",700,62)                   # 5-hop shell → 23
+    tx("L4","L5",600,63); tx("L5","L6",500,64)
 
     df = pd.DataFrame(rows)
-
-    # ── Run engine ────────────────────────────────────────────────────────────
     engine = FraudDetectionEngine(df)
-    engine.analyse(
-        cycle_min_len=3, cycle_max_len=5,
-        fan_threshold=10, fan_window_hours=72,
-        shell_max_txns=2, shell_min_hops=3,
-    )
+    engine.detect_cycles(3,5)
+    engine.detect_fan_in_out(10,72)
+    engine.detect_shell_networks(3,3)
 
-    # ── Score ─────────────────────────────────────────────────────────────────
     scorer = SuspicionScorer(engine, velocity_threshold=5, fan_window_hours=72)
-
     print(scorer.report())
-    print()
-
-    scores_df = scorer.score_all()
-    print("=== score_all() DataFrame ===")
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", 120)
-    print(scores_df.to_string(index=False))

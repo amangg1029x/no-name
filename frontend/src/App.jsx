@@ -204,25 +204,28 @@ export default function App() {
               ))}
             </div>
 
-            {/* ── Graph View ── */}
-            {tab === 'graph' && (
-              <div
-                className="fade-in rounded-xl border border-border bg-card overflow-hidden"
-                style={{ height: '540px' }}
-              >
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                  <span className="font-mono text-xs text-slate-500 uppercase tracking-widest">
-                    Transaction Network Graph
-                  </span>
-                  <span className="font-mono text-xs text-slate-600">
-                    hover node for details · scroll to zoom · drag to pan
-                  </span>
-                </div>
-                <div style={{ height: 'calc(100% - 44px)' }}>
-                  <GraphVisualization data={data} />
-                </div>
+            {/* ── Graph View — always mounted, visibility toggled so Cytoscape retains its canvas ── */}
+            <div
+              className="fade-in rounded-xl border border-border bg-card"
+              style={{
+                height: '560px',
+                display: tab === 'graph' ? 'flex' : 'none',
+                flexDirection: 'column',
+              }}
+            >
+              <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+                <span className="font-mono text-xs text-slate-500 uppercase tracking-widest">
+                  Transaction Network Graph
+                </span>
+                <span className="font-mono text-xs text-slate-600">
+                  hover node for details · scroll to zoom · drag to pan
+                </span>
               </div>
-            )}
+              {/* position:relative so the absolute-positioned cy canvas anchors here */}
+              <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+                <GraphVisualization data={data} />
+              </div>
+            </div>
 
             {/* ── Ring Table ── */}
             {tab === 'table' && (
