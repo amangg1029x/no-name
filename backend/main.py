@@ -206,7 +206,7 @@ def _build_response(
         }
 
     # ── summary ───────────────────────────────────────────────────────────────
-    scored = scores_df[~scores_df["skipped"]]
+    scored = scores_df[~scores_df["skipped"]] if "skipped" in scores_df.columns else scores_df
     skipped_count = int(scores_df["skipped"].sum())
 
     ring_type_counts: Dict[str, int] = defaultdict(int)
