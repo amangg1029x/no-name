@@ -138,8 +138,18 @@ def _build_response(
     High-level statistics + a timestamp.
     """
 
+    # Safety defaults for missing columns
     if "skipped" not in scores_df.columns:
         scores_df["skipped"] = False
+    
+    if "score" not in scores_df.columns:
+        scores_df["score"] = 0.0
+
+    if "account_id" not in scores_df.columns:
+        scores_df["account_id"] = []
+
+    # Now filter scored accounts
+    scored = scores_df[~scores_df["skipped"]].copy()
 
     # ── suspicious_accounts ───────────────────────────────────────────────────
     suspicious_accounts: List[dict] = []
