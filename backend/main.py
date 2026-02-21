@@ -138,6 +138,9 @@ def _build_response(
     High-level statistics + a timestamp.
     """
 
+    if "skipped" not in scores_df.columns:
+        scores_df["skipped"] = False
+
     # ── suspicious_accounts ───────────────────────────────────────────────────
     suspicious_accounts: List[dict] = []
     for _, row in scores_df.iterrows():
